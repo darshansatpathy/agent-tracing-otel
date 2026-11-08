@@ -1,0 +1,62 @@
+groups:
+  - name: agent-cost
+    interval: 1m
+    rules:
+      # Spend per hour, by agent and by model (from the SDK's counters, so sampling does not affect them).
+      - record: agent:spend_usd:rate1h
+        expr: sum by (gen_ai_agent_name) (rate(gen_ai_client_cost_usd_total[1h])) * 3600
+      - record: model:spend_usd:rate1h
+        expr: sum by (gen_ai_request_model) (rate(gen_ai_client_cost_usd_total[1h])) * 3600
+
+      # The number to manage: all spend, including on tasks that failed, divided by tasks that completed.
+      - record: agent:cost_per_completed_task_usd:1h
+        expr: |
+          sum by (gen_ai_agent_name) (increase(agent_task_cost_usd_sum[1h]))
+          /
+          sum by (gen_ai_agent_name) (increase(agent_tasks_total{agent_task_outcome="success"}[1h]))
+      - record: agent:cost_per_completed_task_usd:7d
+        expr: |
+          sum by (gen_ai_agent_name) (increase(agent_task_cost_usd_sum[7d]))
+          /
+          sum by (gen_ai_agent_name) (increase(agent_tasks_total{agent_task_outcome="success"}[7d]))
+      - record: agent:success_ratio:1h
+        expr: |
+          sum by (gen_ai_agent_name) (increase(agent_tasks_total{agent_task_outcome="success"}[1h]))
+          /
+          sum by (gen_ai_agent_name) (increase(agent_tasks_total[1h]))
+      - record: agent:task_cost_usd:p95_1h
+        expr: histogram_quantile(0.95, sum by (gen_ai_agent_name, le) (rate(agent_task_cost_usd_bucket[1h])))
+      - record: model:call_error_ratio:15m
+        expr: |
+          sum by (gen_ai_request_model) (rate(gen_ai_client_operation_duration_seconds_count{error_type!=""}[15m]))
+          /
+          sum by (gen_ai_request_model) (rate(gen_ai_client_operation_duration_seconds_count[15m]))
+
+  - name: agent-alerts
+    rules:
+      - alert: AgentCostPerCompletedTaskRising
+        expr: agent:cost_per_completed_task_usd:1h > 1.5 * agent:cost_per_completed_task_usd:7d and agent:spend_usd:rate1h > 1
+        for: 30m
+        labels: {severity: warning}
+        annotations:
+          summary: "{{ $labels.gen_ai_agent_name }}: a completed task costs {{ $value | printf \"%.4f\" }} USD, 50% above its 7-day level"
+          description: Look for retries, longer prompts, a model change, or more failures; failed tasks still spend.
+      - alert: AgentSuccessRatioLow
+        expr: agent:success_ratio:1h < 0.85 and sum by (gen_ai_agent_name) (increase(agent_tasks_total[1h])) > 20
+        for: 15m
+        labels: {severity: warning}
+        annotations:
+          summary: "{{ $labels.gen_ai_agent_name }} completes only {{ $value | humanizePercentage }} of tasks"
+      - alert: ModelCallErrorsHigh
+        expr: model:call_error_ratio:15m > 0.05
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: "{{ $labels.gen_ai_request_model }}: {{ $value | humanizePercentage }} of calls fail"
+      - alert: UnpricedModelInUse
+        expr: sum by (gen_ai_request_model) (increase(gen_ai_client_unpriced_tokens_total[30m])) > 0
+        for: 5m
+        labels: {severity: info}
+        annotations:
+          summary: "{{ $labels.gen_ai_request_model }} has no price; its spend is missing from every cost figure"
+          description: Add it to prices.yaml.

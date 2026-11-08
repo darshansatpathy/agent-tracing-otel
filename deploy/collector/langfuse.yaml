@@ -1,0 +1,13 @@
+# Merged over collector.yaml: also send traces to Langfuse, which reads the GenAI conventions natively.
+#   LANGFUSE_OTLP_ENDPOINT=https://cloud.langfuse.com/api/public/otel   (or your self-hosted URL)
+#   LANGFUSE_AUTH=$(printf '%s' "$LANGFUSE_PUBLIC_KEY:$LANGFUSE_SECRET_KEY" | base64)
+exporters:
+  otlphttp/langfuse:
+    endpoint: ${env:LANGFUSE_OTLP_ENDPOINT}
+    headers:
+      Authorization: Basic ${env:LANGFUSE_AUTH}
+
+service:
+  pipelines:
+    traces:
+      exporters: [otlp/tempo, otlphttp/langfuse]

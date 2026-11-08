@@ -1,0 +1,74 @@
+rule_files: [rules.yaml]
+evaluation_interval: 1m
+
+tests:
+  # 120 tasks an hour, 108 succeed, $0.02 each: cost per completed task = 120*0.02/108.
+  - interval: 1m
+    input_series:
+      - series: 'agent_task_cost_usd_sum{gen_ai_agent_name="triage"}'
+        values: '0+0.04x120'
+      - series: 'agent_tasks_total{gen_ai_agent_name="triage",agent_task_outcome="success"}'
+        values: '0+1.8x120'
+      - series: 'agent_tasks_total{gen_ai_agent_name="triage",agent_task_outcome="failure"}'
+        values: '0+0.2x120'
+    promql_expr_test:
+      - expr: agent:cost_per_completed_task_usd:1h
+        eval_time: 90m
+        exp_samples:
+          - labels: 'agent:cost_per_completed_task_usd:1h{gen_ai_agent_name="triage"}'
+            value: 0.022222222222222223
+      - expr: agent:success_ratio:1h
+        eval_time: 90m
+        exp_samples:
+          - labels: 'agent:success_ratio:1h{gen_ai_agent_name="triage"}'
+            value: 0.9000000000000002
+
+  # Success falls to 70%: the alert fires after 15 minutes.
+  - interval: 1m
+    input_series:
+      - series: 'agent_tasks_total{gen_ai_agent_name="research",agent_task_outcome="success"}'
+        values: '0+0.7x120'
+      - series: 'agent_tasks_total{gen_ai_agent_name="research",agent_task_outcome="failure"}'
+        values: '0+0.3x120'
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: AgentSuccessRatioLow
+        exp_alerts:
+          - exp_labels: {severity: warning, gen_ai_agent_name: research}
+            exp_annotations:
+              summary: research completes only 70% of tasks
+
+  # A model nobody priced: the info alert fires.
+  - interval: 1m
+    input_series:
+      - series: 'gen_ai_client_unpriced_tokens_total{gen_ai_request_model="mystery-model"}'
+        values: '0+500x60'
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: UnpricedModelInUse
+        exp_alerts:
+          - exp_labels: {severity: info, gen_ai_request_model: mystery-model}
+            exp_annotations:
+              summary: mystery-model has no price; its spend is missing from every cost figure
+              description: Add it to prices.yaml.
+
+  # Cost per completed task doubles against the 7-day level: the warning fires.
+  - interval: 10m
+    input_series:
+      - series: 'agent_task_cost_usd_sum{gen_ai_agent_name="triage"}'
+        values: '0+0.5x1000 500+5x60'
+      - series: 'agent_tasks_total{gen_ai_agent_name="triage",agent_task_outcome="success"}'
+        values: '0+25x1060'
+      - series: 'gen_ai_client_cost_usd_total{gen_ai_agent_name="triage"}'
+        values: '0+0.5x1000 500+5x60'
+    alert_rule_test:
+      - eval_time: 10560m
+        alertname: AgentCostPerCompletedTaskRising
+        exp_alerts:
+          - exp_labels: {severity: warning, gen_ai_agent_name: triage}
+            exp_annotations:
+              summary: "triage: a completed task costs 0.2000 USD, 50% above its 7-day level"
+              description: Look for retries, longer prompts, a model change, or more failures; failed tasks still spend.
+      - eval_time: 9000m
+        alertname: AgentCostPerCompletedTaskRising
+        exp_alerts: []
