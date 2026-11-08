@@ -24,17 +24,18 @@ Cost per call and cost per token hide the expensive part of running agents: the 
 import agenttrace
 from agenttrace import task, llm, tool, step
 
-agenttrace.configure(prices="prices.yaml")      # plus your usual OpenTelemetry providers and OTLP exporter
+agenttrace.configure(prices="prices.yaml")  # plus your usual OpenTelemetry providers and OTLP exporter
 
 with task("support-triage", task_id=ticket.id, conversation_id=conv.id) as t:
     with step("draft"), llm("large-model", temperature=0.2) as call:
         resp = client.chat(...)
-        call.usage(input_tokens=resp.usage.prompt_tokens, output_tokens=resp.usage.completion_tokens,
-                    cache_read_tokens=resp.usage.cached_tokens)
+        call.usage(
+            input_tokens=resp.usage.prompt_tokens, output_tokens=resp.usage.completion_tokens, cache_read_tokens=resp.usage.cached_tokens
+        )
         call.response(model=resp.model, finish_reasons=[resp.finish_reason])
     with tool("search_kb", call_id=tc.id):
         hits = kb.search(query)
-    t.outcome("success")            # or "failure", "escalated", "abandoned"; an exception means failure
+    t.outcome("success")  # or "failure", "escalated", "abandoned"; an exception means failure
 ```
 
 For OpenAI-compatible endpoints, `agenttrace.integrations.openai_compat.chat(client, model, messages)` does the span, usage, cache and cost in one call.
