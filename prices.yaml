@@ -1,0 +1,8 @@
+# Example prices in USD per million tokens. Replace with your contract's rates; keep old rows so past traces stay correct.
+currency: USD
+prices:
+  - {model: small-model, input: 0.15, output: 0.60, cache_read: 0.075}
+  - {model: large-model, input: 3.00, output: 15.00, cache_read: 0.30, cache_write: 3.75}
+  - {model: large-model, input: 2.50, output: 12.00, cache_read: 0.25, cache_write: 3.10, effective_from: 2026-10-01}
+  - {model: reasoning-model, input: 10.00, output: 40.00}
+  - {model: "embed-*", input: 0.02, output: 0}
