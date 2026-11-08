@@ -1,0 +1,92 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PROMETHEUS_VERSION: "3.2.1"
+  COLLECTOR_IMAGE: otel/opentelemetry-collector-contrib:0.120.0
+
+jobs:
+  test:
+    name: Lint, types, tests (Python ${{ matrix.python }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+      - name: promtool
+        run: |
+          curl -sSL https://github.com/prometheus/prometheus/releases/download/v${PROMETHEUS_VERSION}/prometheus-${PROMETHEUS_VERSION}.linux-amd64.tar.gz | tar xz
+          echo "$PWD/prometheus-${PROMETHEUS_VERSION}.linux-amd64" >> "$GITHUB_PATH"
+      - run: pip install -e ".[dev]"
+      - run: ruff check .
+      - run: ruff format --check .
+      - run: mypy
+      - name: Tests (conventions, cost, concurrency, analysis, rules and dashboard queries through promtool)
+        run: pytest --cov --cov-report=term-missing --cov-fail-under=90
+
+  collector:
+    name: Collector configuration
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Validate the base config and the Langfuse overlay with the real collector
+        run: |
+          docker run --rm -v "$PWD/deploy/collector:/c:ro" $COLLECTOR_IMAGE validate --config=/c/collector.yaml
+          docker run --rm -e LANGFUSE_OTLP_ENDPOINT=https://example.invalid/api/public/otel -e LANGFUSE_AUTH=eDp5 \
+            -v "$PWD/deploy/collector:/c:ro" $COLLECTOR_IMAGE validate --config=/c/collector.yaml --config=/c/langfuse.yaml
+
+  end-to-end:
+    name: Simulated workload through the collector into Prometheus
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -e ".[dev]"
+      - run: docker compose up -d collector prometheus tempo
+      - name: Send 500 tasks over OTLP and read cost per completed task back from Prometheus
+        run: |
+          for i in $(seq 1 30); do curl -sf http://127.0.0.1:13133 >/dev/null 2>&1 || curl -sf http://127.0.0.1:8889/metrics >/dev/null && break; sleep 2; done
+          agenttrace simulate --tasks 500 --otlp http://127.0.0.1:4318
+          sleep 20
+          curl -sf http://127.0.0.1:8889/metrics | grep -E '^agent_tasks_total' | head
+          for i in $(seq 1 30); do
+            v=$(curl -s 'http://127.0.0.1:9090/api/v1/query' --data-urlencode 'query=sum(agent_tasks_total)' | python -c 'import json,sys; r=json.load(sys.stdin)["data"]["result"]; print(r[0]["value"][1] if r else 0)')
+            [ "${v%.*}" = "500" ] && break; sleep 5
+          done
+          test "${v%.*}" = "500"
+          curl -s 'http://127.0.0.1:9090/api/v1/query' --data-urlencode 'query=sum(agent_task_cost_usd_sum) / sum(agent_tasks_total{agent_task_outcome="success"})' | tee result.json
+          python -c 'import json; v=float(json.load(open("result.json"))["data"]["result"][0]["value"][1]); assert 0.005 < v < 0.5, v; print("cost per completed task", v)'
+      - if: always()
+        run: docker compose logs collector | tail -50
+
+  audit:
+    name: Dependency audit
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - run: pip install -e . pip-audit
+      - run: pip-audit --skip-editable
