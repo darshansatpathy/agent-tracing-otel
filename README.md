@@ -8,6 +8,9 @@
 
 OpenTelemetry tracing for agent runs, built around one number: **what a completed task costs**. Spans follow the OpenTelemetry GenAI semantic conventions, so they work in Langfuse, Tempo and any OTLP backend; metrics feed Prometheus rules and a Grafana dashboard.
 
+> Reference implementation built on synthetic or public data. It distils patterns from production
+> work into code you can run and read; it is not a client system.
+
 Cost per call and cost per token hide the expensive part of running agents: the tasks that fail, retry or get escalated still spend. In the simulated workload in [`docs/cost-report.md`](docs/cost-report.md) (5,000 tasks):
 
 | | |
